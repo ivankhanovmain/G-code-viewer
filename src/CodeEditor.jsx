@@ -110,17 +110,18 @@ const extensions = [
 const operations = { next: findNext, previous: findPrevious, replace: replaceNext, replaceAll }
 
 export const CodeEditor = forwardRef(function CodeEditor({
-  document, buffers, query, simulationLine, followSimulation, onChange, onCursor,
+  document, buffers, query, simulationLine, followSimulation, onChange, onCursor, onSelectBlock,
 }, ref) {
   const root = useRef(null)
   const instance = useRef(null)
   const callbacks = useRef(null)
-  callbacks.current = { onChange, onCursor }
+  callbacks.current = { onChange, onCursor, onSelectBlock }
 
   function reportCursor(state) {
     const position = state.selection.main.head
     const line = state.doc.lineAt(position)
     callbacks.current.onCursor(line.number, position - line.from + 1)
+    return line.number
   }
 
   useLayoutEffect(() => {
@@ -132,7 +133,15 @@ export const CodeEditor = forwardRef(function CodeEditor({
         ...extensions,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) callbacks.current.onChange(id, update.state.doc.toString())
-          if (update.docChanged || update.selectionSet) reportCursor(update.state)
+          if (update.docChanged || update.selectionSet) {
+            const line = reportCursor(update.state)
+            const movedByKey = !update.docChanged && update.transactions.some((transaction) => (
+              transaction.isUserEvent('select') && !transaction.isUserEvent('select.pointer')
+            ))
+            if (movedByKey && line !== update.startState.doc.lineAt(update.startState.selection.main.head).number) {
+              callbacks.current.onSelectBlock(line)
+            }
+          }
         }),
       ],
     })
@@ -210,5 +219,12 @@ export const CodeEditor = forwardRef(function CodeEditor({
     },
   }), [])
 
-  return <div className="code-editor" ref={root} />
+  function selectBlock(event) {
+    const view = instance.current
+    if (!view || !event.target.closest('.cm-line, .cm-lineNumbers .cm-gutterElement')) return
+    const block = view.lineBlockAtHeight(event.clientY - view.documentTop)
+    onSelectBlock(view.state.doc.lineAt(block.from).number)
+  }
+
+  return <div className="code-editor" ref={root} onClick={selectBlock} />
 })

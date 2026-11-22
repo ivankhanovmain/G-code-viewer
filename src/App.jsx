@@ -72,6 +72,7 @@ export default function App() {
   const [split, setSplit] = useState(42)
   const [playing, setPlaying] = useState(false)
   const [simulationLine, setSimulationLine] = useState(null)
+  const [editorSelection, setEditorSelection] = useState(null)
   const [dialog, setDialog] = useState(null)
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState(null)
@@ -89,6 +90,8 @@ export default function App() {
   const deferred = useDeferredValue(active)
   const currentText = deferred.id === active.id ? deferred.text : active.text
   const model = useMemo(() => parseProgram(currentText), [currentText])
+  const blockToInspect = editorSelection?.documentId === active.id &&
+    editorSelection.text === active.text && editorSelection.text === currentText ? editorSelection : null
   const query = useMemo(() => new SearchQuery({
     search: searchMode ? searchText : '',
     replace: replacement,
@@ -126,7 +129,9 @@ export default function App() {
   }
 
   function activate(id) {
+    if (id === activeId) return
     setSimulationLine(null)
+    setEditorSelection(null)
     setActiveId(id)
   }
 
@@ -378,7 +383,8 @@ export default function App() {
             editor={editor} activeId={active.id} documentText={active.text} onClose={closeSearch} />}
           <CodeEditor ref={editor} document={active} buffers={buffers} query={query} simulationLine={simulationLine}
             followSimulation={!expanded} onChange={(id, text) => patchDocument(id, { text })}
-            onCursor={(line, column) => setCursor({ line, column })} />
+            onCursor={(line, column) => setCursor({ line, column })}
+            onSelectBlock={(line) => setEditorSelection({ documentId: active.id, text: active.text, line })} />
           <Diagnostics model={model} open={diagnosticsOpen} onToggle={() => setDiagnosticsOpen(!diagnosticsOpen)}
             onSelect={(line, column) => editor.current?.goTo(line, column)} />
         </section>
@@ -390,7 +396,8 @@ export default function App() {
             setSplit((current) => Math.max(30, Math.min(68, current + (event.key === 'ArrowRight' ? 2 : -2))))
           }}><i /></div>
         <ToolpathViewer ref={viewer} model={model} documentId={active.id} view={view} setView={setView}
-          expanded={expanded} onExpand={() => setExpanded(!expanded)} onSimulationLine={setSimulationLine}
+          editorSelection={blockToInspect} expanded={expanded} onExpand={() => setExpanded(!expanded)}
+          onSimulationLine={setSimulationLine}
           onRunningChange={setPlaying} />
       </main>
       <StatusBar status={saving ? 'Сохранение…' : 'Готово'} cursor={cursor} document={active}

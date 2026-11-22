@@ -367,6 +367,19 @@ export function simulationFrame(model, time) {
   return { index: low, move, position, progress }
 }
 
+export function simulationEndpoint(model, index, endpoint) {
+  const move = model.moves[index]
+  if (!move) return null
+  const atEnd = endpoint === 'end'
+  return {
+    index,
+    move,
+    position: atEnd ? move.points.at(-1) : move.points[0],
+    progress: atEnd ? 1 : 0,
+    time: atEnd ? move.startTime + move.duration : move.startTime,
+  }
+}
+
 export function hasLineJumps(text) {
   return text.split(/\r?\n/).some((line) => {
     const code = scanLine(line).filter((token) => token.kind !== 'comment')

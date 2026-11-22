@@ -1,4 +1,5 @@
 export const DEFAULT_CAMERA = { yaw: 0.58, pitch: 0.60, zoom: 1, x: 0, y: 0 }
+export const ENDPOINT_COLORS = { start: '#9ee0ca', end: '#ffaf80' }
 
 const PLAN_VIEWS = {
   XY: { right: [1, 0, 0], down: [0, -1, 0], normal: [0, 0, 1] },
@@ -80,6 +81,46 @@ function stroke(ctx, points, color, width = 1) {
   ctx.strokeStyle = color
   ctx.lineWidth = width
   ctx.stroke()
+}
+
+function segmentDistanceSquared(x, y, from, to) {
+  const dx = to[0] - from[0]
+  const dy = to[1] - from[1]
+  const lengthSquared = dx * dx + dy * dy
+  const along = lengthSquared ? ((x - from[0]) * dx + (y - from[1]) * dy) / lengthSquared : 0
+  const fraction = Math.max(0, Math.min(1, along))
+  return (x - from[0] - fraction * dx) ** 2 + (y - from[1] - fraction * dy) ** 2
+}
+
+export function pickMove(moves, project, visible, [x, y], preferredIndex) {
+  let nearest = null
+  let best = 8 ** 2
+  for (const [index, { rapid, points }] of moves.entries()) {
+    if (!visible[rapid ? 'rapid' : 'cut']) continue
+    let from = project(points[0])
+    for (let i = 1; i < points.length; i += 1) {
+      const to = project(points[i])
+      const distance = segmentDistanceSquared(x, y, from, to)
+      if (distance < best || (distance === best && (nearest === null || index === preferredIndex))) {
+        nearest = index
+        best = distance
+      }
+      from = to
+    }
+  }
+  return nearest
+}
+
+export function pickEndpoint(points, project, [x, y], currentEndpoint = 'start') {
+  const distance = (point) => {
+    const [px, py] = project(point)
+    return Math.hypot(px - x, py - y)
+  }
+  const start = distance(points[0])
+  const end = distance(points.at(-1))
+  if (Math.min(start, end) > 11) return null
+  if (start === end) return currentEndpoint
+  return start < end ? 'start' : 'end'
 }
 
 function polygon(ctx, points, fill, edge) {
@@ -240,15 +281,46 @@ export function renderScene(canvas, width, height, model, view, camera, visible)
   return orientation
 }
 
-export function renderMarker(canvas, width, height, orientation, frame) {
+function drawEndpoint(ctx, [x, y], endpoint, selected) {
+  const color = ENDPOINT_COLORS[endpoint]
+  if (selected) {
+    ctx.beginPath()
+    ctx.arc(x, y, 10, 0, Math.PI * 2)
+    ctx.strokeStyle = color
+    ctx.lineWidth = 1.5
+    ctx.stroke()
+  }
+  if (endpoint === 'end') {
+    polygon(ctx, [[x, y - 6], [x + 6, y], [x, y + 6], [x - 6, y]], color, '#243135')
+  } else {
+    ctx.beginPath()
+    ctx.arc(x, y, 5, 0, Math.PI * 2)
+    ctx.fillStyle = color
+    ctx.fill()
+    ctx.strokeStyle = '#243135'
+    ctx.lineWidth = 1
+    ctx.stroke()
+  }
+}
+
+export function renderMarker(canvas, width, height, orientation, frame, endpoint) {
   const ctx = prepareCanvas(canvas, width, height)
   if (!frame || !orientation) return
   const { points, rapid } = frame.move
   const { point } = orientation
-  const index = Math.floor(frame.progress * (points.length - 1))
-  const leading = [...points.slice(0, index + 1), frame.position].map(point)
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
+  if (endpoint) {
+    const path = points.map(point)
+    stroke(ctx, path, '#1b2427', 5)
+    stroke(ctx, path, rapid ? '#a8dbea' : '#ffcfad', 2.5)
+    const inactive = endpoint === 'start' ? 'end' : 'start'
+    drawEndpoint(ctx, inactive === 'start' ? path[0] : path.at(-1), inactive, false)
+    drawEndpoint(ctx, endpoint === 'start' ? path[0] : path.at(-1), endpoint, true)
+    return
+  }
+  const index = Math.floor(frame.progress * (points.length - 1))
+  const leading = [...points.slice(0, index + 1), frame.position].map(point)
   stroke(ctx, leading, rapid ? '#a8dbea' : '#ffcfad', 3)
   const [x, y] = point(frame.position)
   ctx.fillStyle = '#ff9b6240'

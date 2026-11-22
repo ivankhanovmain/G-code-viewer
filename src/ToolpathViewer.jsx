@@ -2,8 +2,8 @@ import {
   Box, Crosshair, Grid2X2, Maximize2, Minimize2, Minus, Pause, Play, Plus, SkipBack, SkipForward,
 } from 'lucide-react'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
-import { simulationFrame } from './gcode.js'
-import { DEFAULT_CAMERA, renderMarker, renderScene } from './plot.js'
+import { simulationEndpoint, simulationFrame } from './gcode.js'
+import { DEFAULT_CAMERA, ENDPOINT_COLORS, pickEndpoint, pickMove, renderMarker, renderScene } from './plot.js'
 
 const VIEWS = ['3D', 'XY', 'XZ', 'YZ']
 const SPEEDS = [0.5, 1, 2, 5, 10, 25]
@@ -21,7 +21,7 @@ function integer(number) {
 }
 
 export const ToolpathViewer = forwardRef(function ToolpathViewer({
-  model, documentId, view, setView, expanded, onExpand, onSimulationLine, onRunningChange,
+  model, documentId, editorSelection, view, setView, expanded, onExpand, onSimulationLine, onRunningChange,
 }, ref) {
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [camera, setCamera] = useState(DEFAULT_CAMERA)
@@ -29,6 +29,7 @@ export const ToolpathViewer = forwardRef(function ToolpathViewer({
   const [time, setTime] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [engaged, setEngaged] = useState(false)
+  const [inspection, setInspection] = useState(null)
   const [speed, setSpeed] = useState(1)
   const surface = useRef(null)
   const scene = useRef(null)
@@ -36,7 +37,9 @@ export const ToolpathViewer = forwardRef(function ToolpathViewer({
   const orientation = useRef(null)
   const drag = useRef(null)
   const clock = useRef(0)
-  const located = simulationFrame(model, time)
+  // A frame's end and the next frame's start share the same timeline time.
+  const endpointFrame = inspection && simulationEndpoint(model, inspection.index, inspection.endpoint)
+  const located = endpointFrame ?? simulationFrame(model, time)
   const frame = engaged ? located : null
   const disabled = !model.moves.length
   const { width, height } = size
@@ -71,14 +74,13 @@ export const ToolpathViewer = forwardRef(function ToolpathViewer({
   useLayoutEffect(() => {
     if (!width || !height) return
     const showFrame = !frame || visible[frame.move.rapid ? 'rapid' : 'cut']
-    renderMarker(marker.current, width, height, orientation.current, showFrame ? frame : null)
-  }, [width, height, frame, model, view, camera, visible])
+    renderMarker(marker.current, width, height, orientation.current, showFrame ? frame : null, inspection?.endpoint)
+  }, [width, height, frame, model, view, camera, visible, inspection?.endpoint])
 
   useLayoutEffect(() => {
-    if (drag.current && surface.current.hasPointerCapture(drag.current.id)) {
-      surface.current.releasePointerCapture(drag.current.id)
-    }
+    const gesture = drag.current
     drag.current = null
+    if (gesture?.element.hasPointerCapture(gesture.id)) gesture.element.releasePointerCapture(gesture.id)
     setCamera(DEFAULT_CAMERA)
   }, [documentId, view])
 
@@ -87,7 +89,24 @@ export const ToolpathViewer = forwardRef(function ToolpathViewer({
     setTime(0)
     setPlaying(false)
     setEngaged(false)
+    setInspection(null)
   }, [model, documentId])
+
+  const inspectEndpoint = useCallback((index, endpoint) => {
+    const target = simulationEndpoint(model, index, endpoint)
+    if (!target) return
+    clock.current = target.time
+    setTime(target.time)
+    setPlaying(false)
+    setEngaged(true)
+    setInspection({ index, endpoint })
+  }, [model])
+
+  useLayoutEffect(() => {
+    if (!editorSelection) return
+    const index = model.moves.findIndex((move) => move.line === editorSelection.line)
+    if (index >= 0) inspectEndpoint(index, 'start')
+  }, [editorSelection, model, inspectEndpoint])
 
   useEffect(() => {
     onSimulationLine(frame?.move.line ?? null)
@@ -97,7 +116,7 @@ export const ToolpathViewer = forwardRef(function ToolpathViewer({
     onRunningChange(playing)
   }, [playing, onRunningChange])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!playing) return
     let previous
     let id
@@ -121,6 +140,7 @@ export const ToolpathViewer = forwardRef(function ToolpathViewer({
     clock.current = clamp(seconds, 0, model.duration)
     setTime(clock.current)
     setEngaged(true)
+    setInspection(null)
   }
 
   function togglePlayback() {
@@ -130,15 +150,15 @@ export const ToolpathViewer = forwardRef(function ToolpathViewer({
       return
     }
     if (clock.current >= model.duration) seek(0)
+    else setInspection(null)
     setEngaged(true)
     setPlaying(true)
   }
 
   function step(direction) {
     if (disabled) return
-    setPlaying(false)
-    const next = clamp((located?.index ?? 0) + direction, 0, model.moves.length - 1)
-    seek(model.moves[next].startTime)
+    const next = clamp(located.index + direction, 0, model.moves.length - 1)
+    inspectEndpoint(next, 'start')
   }
 
   function fit() {
@@ -149,24 +169,43 @@ export const ToolpathViewer = forwardRef(function ToolpathViewer({
 
   function startDrag(event) {
     if (event.button > 2 || drag.current) return
-    const pan = event.button !== 0 || event.shiftKey || view !== '3D'
-    drag.current = { x: event.clientX, y: event.clientY, id: event.pointerId, pan }
+    const select = event.button === 0 && !event.shiftKey
+    drag.current = {
+      x: event.clientX, y: event.clientY, id: event.pointerId, element: event.currentTarget,
+      pan: !select || view !== '3D', select, moved: false,
+    }
     event.currentTarget.setPointerCapture(event.pointerId)
   }
 
   function moveDrag(event) {
     if (drag.current?.id !== event.pointerId) return
-    const { x, y, pan } = drag.current
+    const { x, y, pan, moved } = drag.current
     const dx = event.clientX - x
     const dy = event.clientY - y
-    drag.current = { ...drag.current, x: event.clientX, y: event.clientY }
+    if (!moved && Math.hypot(dx, dy) < 4) return
+    drag.current = { ...drag.current, x: event.clientX, y: event.clientY, moved: true }
     setCamera((current) => pan
       ? { ...current, x: current.x + dx, y: current.y + dy }
       : { ...current, yaw: current.yaw + dx * 0.008, pitch: clamp(current.pitch + dy * 0.006, 0.06, 1.53) })
   }
 
   function endDrag(event) {
-    if (drag.current?.id === event.pointerId) drag.current = null
+    const gesture = drag.current
+    if (gesture?.id !== event.pointerId) return
+    drag.current = null
+    if (event.type !== 'pointerup' || gesture.moved || !gesture.select || disabled || !orientation.current) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const pointer = [event.clientX - rect.left, event.clientY - rect.top]
+    const { point } = orientation.current
+    if (endpointFrame && visible[located.move.rapid ? 'rapid' : 'cut']) {
+      const endpoint = pickEndpoint(located.move.points, point, pointer, inspection.endpoint)
+      if (endpoint) {
+        inspectEndpoint(located.index, endpoint)
+        return
+      }
+    }
+    const index = pickMove(model.moves, point, visible, pointer, located.index)
+    if (index !== null) inspectEndpoint(index, 'start')
   }
 
   function toggleLayer(layer) {
@@ -225,6 +264,19 @@ export const ToolpathViewer = forwardRef(function ToolpathViewer({
         <div className="plot-legend" aria-label="Слои траектории">
           <button type="button" aria-pressed={visible.cut} onClick={() => toggleLayer('cut')}><i className="legend-cut" />Резание</button>
           <button type="button" aria-pressed={visible.rapid} onClick={() => toggleLayer('rapid')}><i className="legend-rapid" />Холостой ход</button>
+        </div>
+      </div>
+      <div className="frame-endpoints">
+        <span className="frame-source">{located ? `Строка ${located.move.line}` : 'Кадр —'}</span>
+        <div className="endpoint-switch" role="group" aria-label="Позиция в кадре">
+          {[['start', 'Начало'], ['end', 'Конец']].map(([endpoint, label]) => (
+            <button key={endpoint} type="button" title={`${label} кадра`} aria-label={`${label} кадра`}
+              aria-pressed={inspection?.endpoint === endpoint} disabled={disabled}
+              style={{ '--endpoint-color': ENDPOINT_COLORS[endpoint] }}
+              onClick={() => inspectEndpoint(located.index, endpoint)}>
+              <i className={`endpoint-icon ${endpoint}`} />{label}
+            </button>
+          ))}
         </div>
       </div>
       <div className="coordinate-bar">

@@ -181,6 +181,7 @@ export function HelpDialog({ onClose }) {
       <div className="modal-content">
         <dl className="shortcuts">{shortcuts.map(([label, key]) => <div key={label}><dt>{label}</dt><dd><kbd>{key}</kbd></dd></div>)}</dl>
         <p className="help-details">Перетаскивание вращает 3D-вид. Правая кнопка или Shift перемещают вид, колесо меняет масштаб.</p>
+        <p className="help-details">Щёлкните строку с перемещением или участок траектории. Кнопки «Начало» и «Конец» показывают выбранную точку кадра.</p>
       </div>
       <div className="modal-actions"><button type="button" className="primary-button" onClick={onClose}>Готово</button></div>
     </Modal>

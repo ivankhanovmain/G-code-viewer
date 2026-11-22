@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { hasLineJumps, parseProgram, renumberProgram, scanLine, simulationFrame } from '../src/gcode.js'
+import { hasLineJumps, parseProgram, renumberProgram, scanLine, simulationEndpoint, simulationFrame } from '../src/gcode.js'
 
 function near(actual, expected) {
   assert.ok(Math.abs(actual - expected) < 1e-6, `${actual} ≠ ${expected}`)
@@ -64,6 +64,32 @@ test('a signed radius selects the short or long circular sweep', () => {
   assert.deepEqual(major.issues, [])
   near(minor.cutDistance - 10, 5 * Math.PI)
   near(major.cutDistance - 10, 15 * Math.PI)
+})
+
+test('selects exact arc endpoints and retains the frame on the shared timeline boundary', () => {
+  const model = parseProgram('G0 X10.\nG3 X20. Y10. R10. F600\nG1 X22.')
+  assert.deepEqual(model.issues, [])
+  const start = simulationEndpoint(model, 1, 'start')
+  const end = simulationEndpoint(model, 1, 'end')
+  assert.deepEqual(start.position, [10, 0, 0])
+  assert.deepEqual(end.position, [20, 10, 0])
+  assert.equal(start.progress, 0)
+  assert.equal(end.progress, 1)
+  assert.equal(start.move.line, 2)
+  assert.equal(end.move.line, 2)
+  assert.equal(start.time, model.moves[1].startTime)
+  assert.equal(end.time, model.moves[2].startTime)
+  assert.equal(simulationFrame(model, end.time).move.line, 3)
+})
+
+test('distinguishes the two timeline positions of a closed arc', () => {
+  const model = parseProgram('G0 X10.\nG3 I-10. J0. F600')
+  const start = simulationEndpoint(model, 1, 'start')
+  const end = simulationEndpoint(model, 1, 'end')
+  assert.deepEqual(start.position, end.position)
+  assert.ok(start.time < end.time)
+  assert.equal(end.time, model.duration)
+  assert.equal(simulationEndpoint(model, 2, 'end'), null)
 })
 
 test('reports malformed blocks with addresses and resumes after errors', () => {
