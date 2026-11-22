@@ -4,6 +4,8 @@
 
 ## Запуск
 
+Портативные сборки для Windows и Linux доступны в разделе [Releases](https://github.com/ivankhanovmain/G-code-viewer/releases).
+
 Для запуска из исходников нужны Node.js 22.12 или новее и npm.
 
 ```sh
